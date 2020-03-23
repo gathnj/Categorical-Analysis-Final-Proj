@@ -1,0 +1,492 @@
+---
+title: "PH 241 Project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(epitools)
+library(dplyr)
+library(knitr)
+library(lmtest)
+library(epiR)
+library(ResourceSelection)
+library(foreign)
+library(latex2exp) #to add math symbols to the graphs
+library(gridExtra) #to arrange plots in a grid
+library(esquisse)
+```
+
+```{r}
+Nhanes_data <- merge(nhanes11_14_2_15_17, nhanes_11_14_sad_vs_wc,by="SEQN") #Merging Datasets
+
+Nhanes_data_select <- select(Nhanes_data, "SEQN", "fincome", "hyper_cat", "hyper_cat2", "race","BMXWT", "BMXHT", "bmipct", "BMI_cat", "RIAGENDR.x" , "age_cat", "PAD680", "INDFMPIR.x", "PA_guide_met.y") #Selecting Variables
+
+Nhanes_data_select <- rename(Nhanes_data_select, RIAGENDR = RIAGENDR.x, INDFMPIR = INDFMPIR.x, PA_guide_met = PA_guide_met.y) #Renaming Variables
+
+Nhanes_data_select
+```
+
+```{r}
+#manually calculating bmi. not comparable between participants, as ages,sex, and year vary
+Nhanes_data_select <- mutate(Nhanes_data_select,BMI = (BMXWT/BMXHT^2)*10000)
+
+#rounding bmi percentiles
+Nhanes_data_select <- mutate(Nhanes_data_select, bmipct_rnd = trunc(bmipct, digits = 2))
+
+#creating categoricals of bmi percentiles
+Nhanes_data_select <- mutate(Nhanes_data_select, bmipct_cat = ifelse(bmipct_rnd %in% 85:94, 1, ifelse(bmipct_rnd %in% 95:98, 2, ifelse(bmipct_rnd %in% 99:100, 3, 0))))
+
+#creating binary bmi categories
+Nhanes_data_select <- mutate(Nhanes_data_select, bmi_bi = ifelse(bmipct_rnd %in% 85:100, 1, 0))
+
+#comment in below if you decide to use these categories for sedentary hours
+#Nhanes_data_select <- mutate(Nhanes_data_select, sedentary = ifelse(PAD680 %in% 61:120, 1, ifelse(PAD680 %in% 121:180, 2, ifelse(bmipct_rnd %in% 181:240, 3, ifelse(PAD680 %in% 241:300, 4, ifelse(PAD680 %in% 301:360, 5, ifelse(PAD680 %in% 361:420, 6, ifelse(PAD680 %in% 421:480, 7, ifelse(PAD680 %in% 481:540, 8, ifelse(PAD680 %in% 541:600, 9, ifelse(PAD680 %in% 601:660, 10, ifelse(PAD680 %in% 661:720, 11, ifelse(PAD680 %in% 721:780, 12, ifelse(PAD680 %in% 781:840, 13, ifelse(PAD680 %in% 841:900, 14, ifelse(PAD680 %in% 901:960, 15, 0))))))))))))))))#
+
+#creating binary of sedentary hours
+Nhanes_data_select <- mutate(Nhanes_data_select, sedentary = ifelse(PAD680 %in% 481:960, 1, 0))
+
+BMIcat_hyp_4 <- epitable(Nhanes_data_select$bmipct_cat, Nhanes_data_select$hyper_cat2, ncol=2,byrow=T, rev = c("neither")) #2x2 Table Set Up
+
+BMIcat_hyp_4
+
+#rownames(BMIcat_hyp_4) <-c("Under/normal", "Overweight", "Obese I", "Obese II") # Naming Rows
+#colnames(BMIcat_hyp_4) <-c("Normal", "Hypertension") # Naming Columns
+
+epitab(BMIcat_hyp_4, method = c("oddsratio")) #Calculating Relative Risk and CIs
+
+```
+
+
+```{r}
+BMIcat_hyp_activity <-with(Nhanes_data_select,table(bmipct_cat, hyper_cat2, by = sedentary))
+      
+#BMIcat_hyp_RIAGENDR <-with(Nhanes_data_select,table(bmipct_cat, hyper_cat2, by = RIAGENDR))
+
+#BMIcat_hyp_race # 2x2 of BMI vs Hypertension by Race 
+
+#BMIcat_hyp_RIAGENDR # 2x2 of BMI vs Hypertension by Gender 
+
+BMIcat_hyp_activity
+
+sedentary_hyp <- epitable(Nhanes_data_select$sedentary, Nhanes_data_select$hyper_cat2, ncol=2,byrow=T, rev = c("neither"))
+
+sedentary_hyp
+
+mean(Nhanes_data_select$sedentary)
+```
+
+```{r}
+#Intercept Model (a)
+
+inte_model<-glm(hyper_cat2~1, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(inte_model)$coef
+
+confint(inte_model)
+
+logLik(inte_model)
+
+broom::tidy(inte_model,conf.int = FALSE,exponentiate = TRUE)
+
+```
+
+
+```{r}
+#Intercept + Slope Model
+
+int_slope <- glm(hyper_cat2~bmi_bi, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(int_slope)$coef
+
+confint(int_slope)
+
+lrtest(int_slope)
+
+broom::tidy(int_slope,conf.int = TRUE,exponentiate = TRUE)
+```
+
+
+```{r}
+#Indicator Model (bmipct_cat)
+
+Nhanes_data_select <- Nhanes_data_select%>%mutate(Z1 =case_when(bmipct_cat==1~1,
+                                                                    TRUE~0),
+                                                  Z2 =case_when(bmipct_cat==2~1,
+                                                                    TRUE~0),
+                                                  Z3 =case_when(bmipct_cat==3~1,
+                                                                    TRUE~0))
+
+indi_mod <-glm(hyper_cat2~Z1+Z2+Z3, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(indi_mod)$coef #Model Results + Wald Test
+
+confint(indi_mod) #Confidence Interval
+
+lrtest(int_slope,indi_mod) #Likelihood Ratio Test
+
+broom::tidy(indi_mod,conf.int = TRUE,exponentiate = TRUE)
+
+#THIS TELLS US ITS THRESHOLD
+
+#Goodness of Fit Test
+#h1 <- hoslem.test(x= Nhanes_data_select$hyper_cat2,
+           # y = predict(int_slope, type = "response", newdata = Nhanes_data_select),
+           # g = 2)
+#h1
+
+# Test of Association
+```
+
+```{r}
+# Ordered Model (bmipct_cat); testing for trend in log OR
+
+order_mod <-glm(hyper_cat2~bmipct_cat, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(order_mod)$coef #Model Results + Wald Test
+
+confint(order_mod) #Confidence Interval
+
+lrtest(indi_mod, order_mod) #Likelihood Ratio Test
+
+broom::tidy(order_mod,conf.int = TRUE,exponentiate = TRUE)
+
+```
+
+
+
+```{r}
+#Confounding Inter-Slope Model
+
+intercept_confound_mod <-glm(hyper_cat2~bmi_bi + sedentary, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(intercept_confound_mod)$coef
+
+confint(intercept_confound_mod)
+
+lrtest(int_slope, intercept_confound_mod)
+
+broom::tidy(intercept_confound_mod,conf.int = TRUE,exponentiate = TRUE)
+
+```
+
+```{r}
+#Interaction Model
+
+intercept_interact_mod <-glm(hyper_cat2~bmi_bi*sedentary, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(intercept_interact_mod)$coef
+
+confint(intercept_interact_mod)
+
+lrtest(intercept_confound_mod, intercept_interact_mod)
+
+broom::tidy(intercept_interact_mod,conf.int = TRUE,exponentiate = TRUE)
+
+#h2 <- hoslem.test(x= Nhanes_data_select$hyper_cat2,
+          #  y = predict(confound_mod, type = "response", newdata = Nhanes_data_select),
+          #  g = 2)
+#h2
+
+```
+
+
+``````{r}
+#Evaluate Race as Confounder (Indicator Model)
+
+Nhanes_data_select <- Nhanes_data_select%>%mutate(Z1_race =case_when(race==2~1,
+                                                                    TRUE~0),
+                                                  Z2_race =case_when(race==3~1,
+                                                                    TRUE~0),
+                                                  Z3_race =case_when(race==4~1,
+                                                                    TRUE~0))
+
+testmodel2 <-glm(hyper_cat2~bmi_bi + Z1_race + Z2_race + Z3_race, data = Nhanes_data_select, family = binomial("logit"))
+
+testmodel3 <-glm(hyper_cat2~bmi_bi + as.factor(race), data = Nhanes_data_select, family = binomial("logit"))
+
+summary(testmodel2)$coef
+
+confint(testmodel2)
+
+lrtest(int_slope,testmodel2)
+
+broom::tidy(testmodel2,conf.int = TRUE,exponentiate = TRUE)
+
+summary(testmodel3)$coef
+
+confint(testmodel3)
+
+lrtest(int_slope,testmodel3)
+
+broom::tidy(testmodel3,conf.int = TRUE,exponentiate = TRUE)
+```
+
+
+```{r}
+#Evaluate Race as Interaction Term
+
+testmodel4 <-glm(hyper_cat2~bmi_bi*as.factor(race), data = Nhanes_data_select, family = binomial("logit"))
+
+summary(testmodel4)$coef
+
+confint(testmodel4)
+
+lrtest(testmodel3,testmodel4)
+
+broom::tidy(testmodel4,conf.int = TRUE,exponentiate = TRUE)
+
+```
+
+
+```{r}
+#Indicator with Confounding Model
+
+ind_confound_mod <-glm(hyper_cat2~as.factor(bmipct_cat)+sedentary, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(ind_confound_mod)$coef
+
+confint(ind_confound_mod)
+
+lrtest(indi_mod, ind_confound_mod)
+
+h2 <- hoslem.test(x= Nhanes_data_select$hyper_cat2,
+            y = predict(ind_confound_mod, type = "response", newdata = Nhanes_data_select),
+            g = 2)
+h2
+```
+
+
+```{r}
+#GRAPHS OF RISK, ODDS, AND LOG ODDS FOR bmipct_cat Ordered Model
+
+#Estimate the risk using the summarize function
+risk_table <- Nhanes_data_select %>% 
+  group_by(bmipct_cat) %>% 
+  summarize(risk = mean(hyper_cat2))
+
+risk_table <- risk_table %>%
+  mutate(odds = risk/(1-risk)) %>% #estimate the odds 
+  mutate(log.odds = log(odds)) #estimate the log odds
+
+#Generate the model-based risk estimates
+Nhanes_data_select$pred_risk <- predict(int_slope, #use the model to...
+                                   type = "response", #predict the risk for...
+                                   newdata = Nhanes_data_select) #the Nhanes data
+
+#Generate the model-based odds and log odds estimates
+Nhanes_data_select <- Nhanes_data_select %>%
+  mutate(pred_odds = pred_risk/(1-pred_risk)) %>%
+  mutate(pred_log_odds = log(pred_odds))
+
+risk_plot <- risk_table %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = risk)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_risk),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels =  
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +  
+  ylab("Risk of Hypertension") + 
+  theme_classic()
+
+odds_plot <- risk_table %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = odds)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_odds),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +  
+  ylab("Odds of Hypertension") + 
+  theme_classic()
+
+log_odds_plot <- risk_table %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = log.odds)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_log_odds),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +
+                                
+  ylab("Log odds of Hypertension") + 
+  theme_classic()
+
+#grid.arrange(
+  #risk_plot,
+  #odds_plot,
+  #log_odds_plot,
+  #ncol = 2)
+
+log_odds_plot
+```
+
+
+```{r}
+#Plotting BMI log OR graphs by Sedentary Activity (as Binary)
+preds_con <- data.frame(id_con = Nhanes_data_select$SEQN, 
+                    bmi_con = Nhanes_data_select$bmipct_cat,
+                    sedentary_con = as.factor(Nhanes_data_select$sedentary),
+                    pred_risk_con =  predict(intercept_confound_mod,
+                 newdata = Nhanes_data_select,
+                 type = "response"))
+
+
+preds_con <- preds_con %>%
+  mutate(odds = pred_risk_con/(1-pred_risk_con)) %>%
+  mutate(log_odds = log(odds))
+
+p1 <- preds_con %>%
+  mutate(sedentary_con = ifelse(sedentary_con == 1, "More than Six Hours", "Less than Six Hours")) %>%
+  ggplot(aes(x = bmi_con, y = log_odds, col = sedentary_con)) + 
+  geom_line() + 
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +  
+  theme(legend.title = element_blank()) +  #hide legend title
+  ylab("Log odds of Hypertension") +
+  ggtitle("Model Results: Hypertension ~ BMI + Hours of Sedentary Activity", subtitle = "This assumes no interaction, which is why the lines are parallel.")
+
+p1
+```
+
+# GRAPHS OF RISK, ODDS, AND LOG ODDS FOR BMIPCT_CAT ORDERED MODEL
+
+```{r}
+#Estimate the risk using the summarize function
+risk_table_5 <- Nhanes_data_select %>% 
+  group_by(bmipct_cat) %>% 
+  summarize(risk = mean(hyper_cat2))
+
+risk_table_5 <- risk_table_5 %>%
+  mutate(odds = risk/(1-risk)) %>% #estimate the odds 
+  mutate(log.odds = log(odds)) #estimate the log odds
+
+#Generate the model-based risk estimates
+Nhanes_data_select$pred_risk <- predict(mod3_bmipct_cat, #use the model to...
+                                   type = "response", #predict the risk for...
+                                   newdata = Nhanes_data_select) #the Nhanes data
+
+#Generate the model-based odds and log odds estimates
+Nhanes_data_select <- Nhanes_data_select %>%
+  mutate(pred_odds = pred_risk/(1-pred_risk)) %>%
+  mutate(pred_log_odds = log(pred_odds))
+
+risk_plot_5 <- risk_table_5 %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = risk)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_risk),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +  
+  ylab("Risk of Hypertension") + 
+  theme_classic()
+
+odds_plot_5 <- risk_table_5 %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = odds)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_odds),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +  
+  ylab("Odds of Hypertension") + 
+  theme_classic()
+
+log_odds_plot_5 <- risk_table_5 %>%
+  #the observed data from before
+  ggplot(aes(x = bmipct_cat, y = log.odds)) + 
+  geom_point(alpha = 0.5) + 
+  #the fitted line
+  geom_line(aes(y = pred_log_odds),
+            data = Nhanes_data_select,
+            col = "blue") + 
+  #general formatting
+  scale_x_continuous("Body Mass Index", breaks = 0:3, labels = 
+                            c("Under/Normal",
+                              "Overweight",
+                              "Obese I",
+                              "Obese II")) +
+                                
+  ylab("Log odds of Hypertension") + 
+  theme_classic()
+
+grid.arrange(
+  risk_plot_5,
+  odds_plot_5,
+  log_odds_plot_5,
+  ncol = 2)
+```
+
+# Other models evaluated:
+
+```{r}
+#Ordered Model (BMI) (continuous)
+
+mod3_BMI <-glm(hyper_cat2~BMI, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(mod3_BMI)$coef #Model Results + Wald Test
+
+lrtest(mod3_BMI) #Likelihood Ratio Test
+
+confint(mod3_BMI) #Confidence Interval
+```
+
+
+```{r}
+#Ordered Model (bmipct) (continuous)
+
+mod3_bmipct <-glm(hyper_cat2~bmipct, data = Nhanes_data_select, family = binomial("logit"))
+
+summary(mod3_bmipct)$coef #Model Results + Wald Test
+
+lrtest(mod3_BMI, mod3_bmipct) #Likelihood Ratio Test
+
+confint(mod3_bmipct) #Confidence Interval
+
+#esquisse::esquisser(Nhanes_data_select)
+```
+
+
+
+
+
+
